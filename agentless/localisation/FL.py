@@ -3,7 +3,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from json import JSONDecodeError
-from typing import Any
+from typing import Any, Tuple, List, Dict
 
 from langsmith import traceable
 
@@ -14,6 +14,7 @@ from Agentless.agentless.util.preprocess_data import transfer_arb_locs_to_locs, 
     show_project_structure, get_full_file_paths_and_classes_and_functions, get_repo_files
 from apps.helper import read_file
 from apps.services.code_skeleton_extractor import filtered_nodes_by_label
+from apps.services.open_ia_llm import OpenIA_LLM
 
 
 class FL(ABC):
@@ -24,7 +25,7 @@ class FL(ABC):
         self.test_step = test_step
 
     @abstractmethod
-    def localize(self, top_n=1, mock=False) -> tuple[list, list, list, any]:
+    def localize_files(self, top_n=1, mock=False) -> tuple[list, list, list, any]:
         pass
 
 
@@ -210,62 +211,122 @@ Return only the locations.
 """
 
     create_skeleton_code = """
-    You are an expert in writing test code that covers specific criteria within the automotive zone controller domain using a private framework repository called TAF (Test Automotive Framework).
-    We have extracted unordered object of classes and methods from the TAF repository that can potentially be used to write the test code of the requirement provided.
+    You are an expert in writing test code for the automotive zone controller domain using a private framework repository called TAF (Test Automotive Framework). Your role is to generate pseudocode based on the extracted classes, methods, and logic ('glue_logic') that will fulfill specific test steps for a given requirement.
+    
+    Each test case shall ensure that the Device Under Test (DUT) is in the proper state in its precondition before starting any action. Do not assume that the DUT boots from scratch at the start of each test case.
+    
+    ### Objective:
+    Your task is to write pseudocode that outlines the test code necessary to implement a specific test step for the provided requirement. The pseudocode must include relevant classes, methods, and logic ('glue_logic') necessary to execute the test process.
+    
+    ### Event Types:
+    Each step of the pseudocode should belong to one of the following event types, each representing a different phase of the test process:
+    
+    1. **stimulation**: Actions or triggers that simulate inputs or events within the system. This typically starts the test by interacting with the system under test.
+    
+    2. **retrieval**: Gathering the results or system states after the stimulation event. This is the data or response collected as a result of the initial trigger.
+    
+    3. **report**: Logging or documenting the retrieved values, outputs, or system states to ensure traceability and validation of the test results.
+    
+    4. **glue_logic**: Pure Python logic used to manipulate internal data, prepare inputs, or format outputs. These are non-API-related steps that handle test data, calculations, or other internal code logic. **No methods or classes are involved in this step**.
+    
+    ### TAF Framework Code Considerations:
+    To ensure the pseudocode aligns with the TAF framework, consider the following guidelines:
+    - Follow the design patterns and best practices established in the TAF framework.
+    - Utilize the specific classes and methods that are relevant to the TAF's architectural structure.
+    - Ensure any data manipulations or validations align with TAF's operational procedures.
+    
+    
+    ### TAF Framework Code Input:
+    {taf_code_description}
 
-    You are tasked to write a pseudocode of the test code that fulfills a specific test step of the requirement provided. The pseudocode should include the classes and methods that are relevant to the test step of the requirement and the process of testing.
+    ### Example Test Flow:
+    You are expected to organize the pseudocode using the following format, ensuring each step is explained clearly with a description and any applicable methods. If it's a `glue_logic` step, ensure it contains pure logic with no associated methods.
 
     ### Requirement ###
     {requirement}
-    
-    ### test step ###
+
+    ### Test Step ###
     {test_step}
 
-    ### Reference Classes and Methods ###
-    {classes}
-
-    ### example output ###
+    ### Pseudocode Example Output ###
     ```
-    1 - {{ "step_explication": "stimulation: un event 1" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1), "full_path2.file2.MyClass2: my_method2(param1, param2)"] }}
-    2 - {{ "step_explication": "retrieval: value triggered by event 1" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1), "full_path2.file2.MyClass2: my_method2(param1, param2)"] }}
-    3 - {{ "step_explication": "report: value triggered by event 1" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1), "full_path2.file2.MyClass2: my_method2(param1, param2)"] }}
-    4 - {{ "step_explication": "stimulation: un event 2" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1)] }}
-    5 - {{ "step_explication": "retrieval: value triggered by event 2" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1)] }}
-    6 - {{ "step_explication": "report: value triggered by event 2" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1)] }}
+    [
+    {{ "step_explication": "stimulation: trigger event 1 to initiate test", "methods_used": ["full_path3.file3.MyClass3: my_method3", "full_path2.file2.MyClass2: my_method2"] }} ,
+     {{ "step_explication": "glue_logic: prepare input data for retrieval", "methods_used": [] }} ,
+     {{ "step_explication": "retrieval: gather results from event 1", "methods_used": ["full_path3.file3.MyClass3: my_method3", "full_path2.file2.MyClass2: my_method2"] }} ,
+     {{ "step_explication": "report: log gathered results", "methods_used": ["full_path3.file3.MyClass3: my_method3", "full_path2.file2.MyClass2: my_method2"] }} ,
+     {{ "step_explication": "stimulation: trigger event 2 to validate next condition", "methods_used": ["full_path3.file3.MyClass3: my_method3"] }} ,
+     {{ "step_explication": "glue_logic: format result for further processing", "methods_used": [] }} ,
+     {{ "step_explication": "retrieval: obtain system response for event 2", "methods_used": ["full_path3.file3.MyClass3: my_method3"] }} , 
+     {{ "step_explication": "report: log final output for event 2", "methods_used": ["full_path3.file3.MyClass3: my_method3"] }}
+     ]
     ```
 
-    ## Strict Rules:
-    - **the event can be only 'stimulation', 'retrieval', 'report'
-    - **Do not invent or fabricate any method names**; only use those found in the provided file.
-    - **Return the results in the exact format specified** above.
-    - **the list should be well ordered
-    - **in the pseudocode after each result expected in the test there is reporting of the reseal
-    - **do not include any extra information in the output
-    - **in the output of details should be valid json objects with the keys "step_explication" and "methods_used" and the values should be strings with the correct format like specified in the example
-    - Adherence to these rules is mandatory. Any deviation, such as generating method names not present in the files, events don't exist, will result in immediate termination of the task.
+    ### Mandatory Rules:
+    1. **Event Types**: The pseudocode must adhere to the event types defined above (`stimulation`, `retrieval`, `report`, and `glue_logic`).
+    2. **Mandatory Events**: The output **must include at least one event of reporting** and **one event of stimulation or retrieval**. This is crucial to ensure the completeness of the test process.
+    3. **Non-Empty Results**: **Do not return empty results**. Each output must contain valid pseudocode with the required event types specified above; empty or incomplete outputs will not be accepted.
+    4. **Glue Logic Rules**: No methods or classes should be associated with `glue_logic` steps. These steps should only contain internal logic manipulations.
+    5. **Strict Method Usage**: Only use methods and classes listed in the reference. Do not create or fabricate method names or class names not provided.
+    6. **Structured Format**: Return results in the exact format specified. Each step must be a valid JSON object with the keys `"step_explication"` and `"methods_used"`, where `"methods_used"` is either a list of methods or an empty list for `glue_logic` steps.
+    7. **Order of Execution**: Ensure the pseudocode is well-ordered and sequential, as required by the test logic.
+    8. **No Extra Information**: The output must contain only the requested pseudocode, with no additional commentary or details.
+    9. **Method Line Format**: The line format of the method should be as the example: the file path separated by '.' and then separation between the path and the method should be by " : " and the method should not include the parameters, only the name of the method.
+       
+       For example: `"full_path3.file3.MyClass3: my_method3"`
+       
+       
+    ###Additional Rules for DUT State and Variable Management:
+    - **Variable Initialization: Verify that all variables are initialized in the preconditions and that no assumptions are made about their prior state.
+    - **Precondition Verification: Implement checks to confirm DUT is in the correct state before any action. Do not rely on prior test cases for setting state.
+    - **Runtime Verification: Integrate runtime validation to confirm the DUT’s state throughout the test, especially after conditions or events that alter its status.
+    
+    Adherence to these rules is mandatory. Any deviation, such as fabricating methods or classes, or not following the output format or the format of the line of the method, will result in task rejection.
     """
 
+
+
     map_pseudo_code = """
-    You are an expert in writing test code that covers specific criteria within the automotive zone controller domain using a private framework repository called TAF (Test Automotive Framework).
-    You are tasked to verify if a pseudo code of requirement can be mapped to one or multiple lines of the test code
-    You will be provided with requirement for more context
-    Keep in mind the differing perspectives: the requirements are written from the perspective of the Device Under Test (DUT), while the test framework methods are written from the perspective of the test system interacting with the DUT.
-    ### Requirement ###
+    You are an expert in writing test code for the automotive zone controller domain using a private framework repository called TAF (Test Automotive Framework). 
+    Your task is to verify if a set of pseudocode lines for a requirement can be mapped to one or multiple lines of continuous test code, ensuring each segment corresponds to the appropriate actions.
+
+    ### What You Will Receive:
+    1. The **requirement**, providing context for the functionality expected from the Device Under Test (DUT).
+    2. A **set of pseudocode lines**, which represent steps from the DUT perspective that you will need to map.
+    3. A **continuous chunk of test code**, which is written from the perspective of the test system interacting with the DUT.
+    4. A **list of nodes** already taken to prevent overlap in your mappings.
+
+    ### Your Task:
+    1. **Map the pseudocode lines** to one or multiple lines of the continuous test code, ensuring that each action corresponds to valid test code lines.
+    2. **Ensure non-overlapping mappings**: The lines you map must not overlap with previously mapped or reserved lines. The list of already taken lines will be provided.
+    3. If a pseudocode line cannot be mapped to any test code line, return an empty response for that line.
+
+    ### Key Considerations:
+    - Each pseudocode line can map to **one or multiple lines** in the continuous test code.
+    - **Do not include any setup or teardown actions** unless they directly contribute to the main pseudocode action.
+    - If no appropriate line exists in the test code for a particular pseudocode action, return an empty response for that line.
+
+    ### Inputs Provided:
+    - **Requirement**: 
     {requirement}
-    
-    ### pseudo code ###
-    {pseudo_code}
-    
-    ### the test code ###
+
+    - **Pseudocode Lines**: 
+    {pseudo_code_lines}  
+
+    - **Test Code**: 
     {test_code}
-    
-    ### examples output ###
-    example 1:
+
+    - **Lines Taken**: 
+    {nodes_taken}
+
+    ### Example Output:
+    Example 1:
+
     ```
-    line 5: methode(param)
+    line 7: methode(param)
     line 8: self.__tc_id = self.__class__.__name__
     ``` 
-    
+
     example 2:
     ```
     ```
@@ -276,15 +337,21 @@ Return only the locations.
     line 8: voltage = self.__power_path_ctrl.measure_actual_voltage(POWER_PATH_CHANNEL)
     ```
     
-    ## Strict Guidelines:
-    - **return valid line do not hallucinate or generate any line that do not exist 
-    - **if there is no line that represent the pseudo code return empty response
-    - **do not include any extra information in the output
-    - **Main action focus: Only map the lines that represent the primary action in the pseudo code. Ignore setup or context actions that occur before or after.
-    - **you can map the pseudo code to one or multiple lines of the test code
-    - Adherence to these guidelines is critical. Any deviation, such as creating non-existent code lines, will lead to immediate disqualification from the task.
-    
+
+
+
+    ### Strict Guidelines:
+    - **Return valid lines** from the continuous test code only. Do not generate or hallucinate lines that do not exist.
+    - **Do not overlap**: Your result must not include any line already provided in the "lines Taken" list.
+    - **Mappings should be one chunk**: the result should be a one continuous chunk of code with no gaps or missing lines.
+    - **No extra information** should be included in the output.
+    - Focus only on the **primary action** of each pseudocode line. Ignore setup or context lines that do not directly contribute to the primary action.
+    - If no valid mapping exists, return an **empty response**.
+    - Adherence to these guidelines is critical. Any deviation, such as generating non-existent lines or selecting any line already present in the **lines Taken** or the output is discontinuous or missing lines, will lead to immediate disqualification from the task.
     """
+
+
+
 
     verify_tools = """
     You are an expert in writing test code that covers specific criteria within the automotive zone controller domain using a private framework repository called TAF (Test Automotive Framework).
@@ -376,12 +443,82 @@ Return only the locations.
     - **Strictly adhere to these guidelines to ensure the highest level of code quality and correctness.  
     
     """
+    skeleton_verification = """
+You are an expert in writing test code for the automotive zone controller domain using a private framework repository called TAF (Test Automotive Framework).
+I have created a pseudocode for implementing specific requirements, but it was written without full knowledge of how TAF works. Your task is to review and optimize this pseudocode for proper integration with TAF.
+
+Each test case shall ensure that the Device Under Test (DUT) is in the proper state in its precondition before starting any action. Do not assume that the DUT boots from scratch at the start of each test case.
+
+
+### What you will receive:
+1. The **requirement**, which provides the context for the functionality expected from the Device Under Test (DUT).
+2. The **existing pseudocode**, which outlines the steps and tools I initially planned for implementing the requirements.
+3. The **full TAF repository structure** and API descriptions, including available classes, methods, and tools for implementing the tests.
+
+### Your Tasks:
+1. **Verify** the existing pseudocode against the TAF framework:
+    - Identify **missing steps** that need to be added for proper functionality with TAF.
+    - Identify **unnecessary steps** that TAF handles automatically and can be removed from the pseudocode.
+2. **Optimize** the pseudocode:
+    - Adjust any steps to better align with TAF's tools and methods.
+    - Ensure the pseudocode is coherent, streamlined, and follows TAF conventions.
+3. If any changes are needed, **update the pseudocode** and return the optimized version.
+4. **If no changes are needed**, return the exact same pseudocode without any modifications.
+
+### Key Considerations:
+- The **requirement** is written from the perspective of the DUT.
+- The **TAF methods** describe how the test system interacts with the DUT.
+- Your final pseudocode should be efficient, removing any redundant steps and adding any necessary ones based on TAF’s capabilities.
+
+### Inputs Provided:
+- **Requirement:** 
+{requirement}
+
+
+- **Existing Pseudocode:** 
+{pseudocode}
+
+
+- **Reference Classes and Methods from TAF:** 
+{classes}
+
+### Example Output (if changes are needed):
+    ```
+    [ {{ "step_explication": "stimulation: un event 1" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1), "full_path2.file2.MyClass2: my_method2(param1, param2)"] }},
+    {{ "step_explication": "retrieval: value triggered by event 1" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1), "full_path2.file2.MyClass2: my_method2(param1, param2)"] }},
+    {{ "step_explication": "report: value triggered by event 1" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1), "full_path2.file2.MyClass2: my_method2(param1, param2)"] }},
+    {{ "step_explication": "stimulation: un event 2" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1)] }},
+    {{ "step_explication": "retrieval: value triggered by event 2" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1)] }},
+    {{ "step_explication": "report: value triggered by event 2" , "methods_used":["full_path3.file3.MyClass3: my_method3(param1)] }}]
+    ```
+    
+
+### Strict Rules:
+- **Events** must be 'stimulation', 'retrieval', or 'report'.
+- Only use **existing methods** from the provided TAF files—do **not** create new ones.
+- If changes are needed, update the pseudocode while keeping the overall structure logical and streamlined.
+- If **no changes** are needed, return the exact same pseudocode without any modification.
+- Ensure that the **output format** is valid and strictly adheres to the example provided.
+- Return  the output in the exact format specified above** without any extra information
+- The **order** of steps must be logical and complete, with a proper reporting step after each task.
+- **Output** must be valid JSON objects with the exact keys "step_explication" and "methods_used."
+
+
+###Additional Rules for DUT State and Variable Management:
+
+- **Variable Initialization: Verify that all variables are initialized in the preconditions and that no assumptions are made about their prior state.
+- **Precondition Verification: Implement checks to confirm DUT is in the correct state before any action. Do not rely on prior test cases for setting state.
+- **Runtime Verification: Integrate runtime validation to confirm the DUT’s state throughout the test, especially after conditions or events that alter its status.
+"""
+
+
+
+
     def __init__(
-            self, instance_id, structure, requirement, test_step, model_name,
+            self, instance_id, structure, requirement, test_step,
     ):
         super().__init__(instance_id, structure, requirement=requirement, test_step=test_step)
-        self.max_tokens = 3000
-        self.model_name = model_name
+        self.max_tokens = 16000
 
     def extract_examples(self, current):
         final_examples = ""
@@ -419,7 +556,7 @@ Return only the locations.
     @traceable(
         name="7.1.localize files names for test steps"
     )
-    def localize(self, current, top_n=1) -> tuple[list[Any], dict[str, Any], Any]:
+    def localize_files(self, current, top_n=1) -> tuple[list[Any], dict[str, Any]]:
 
         found_files = []
         examples = self.extract_examples(current)
@@ -433,14 +570,11 @@ Return only the locations.
         print("=" * 80)
 
         model = make_model(
-            model=self.model_name,
+            model=OpenIA_LLM.get_version_model("localize_files"),
             max_tokens=self.max_tokens,
             temperature=0,
-            batch_size=1,
         )
-        traj = model.codegen(message, num_samples=1)[0]
-        traj["prompt"] = message
-        raw_output = traj["response"]
+        raw_output = model.invoke(message).content
         model_found_files = _parse_model_return_lines(raw_output)
 
         files, classes, functions = get_full_file_paths_and_classes_and_functions(
@@ -459,32 +593,69 @@ Return only the locations.
 
         return (
             found_files,
-            {"raw_output_files": raw_output},
-            traj,
+            {"raw_output_files": raw_output}
         )
+    @traceable(
+        name="7.3.2.verify the pseudo code using the TAF"
+    )
+    def verify_skeleton(self,skeleton, graph):
+        full_taf = filtered_nodes_by_label(graph)
+        template = self.skeleton_verification
+
+        message = template.format(
+            requirement=self.test_step,
+            classes=json.dumps(full_taf, indent=4),
+            pseudocode=json.dumps(skeleton,indent=4)
+        )
+        print(f"prompting with message:\n{message}")
+        print("=" * 80)
+        model = make_model(
+            model=OpenIA_LLM.get_version_model("verify_skeleton"),
+            max_tokens=self.max_tokens,
+            temperature=0,
+        )
+
+        output = []
+        for i in range(5):
+            row_output = model.invoke(message).content
+            print(row_output)
+            if str(row_output).startswith("```"):
+                row_output = row_output[3:]
+            if row_output.startswith("json"):
+                row_output = row_output[4:]
+            if str(row_output).endswith("```"):
+                row_output = row_output[:-3]
+            try:
+                output = json.loads(row_output)
+                done = True
+            except JSONDecodeError as e:
+                print("error in json of skeleton verification")
+                done = False
+            if done:
+                break
+        return output
 
     @traceable(
         name="7.3.1.generate pseudo code "
     )
-    def give_skeleton(self, files_struct):
+    def give_skeleton(self, taf):
         template = self.create_skeleton_code
         message = template.format(
-            requirement=self.requirement, classes=files_struct, test_step=self.test_step
+            requirement=self.requirement,taf_code_description=json.dumps(taf,indent=4), test_step=self.test_step
         )
         logging.info(f"prompting with message:\n{message}")
         logging.info("=" * 80)
 
         model = make_model(
-            model=self.model_name,
+            model=OpenIA_LLM.get_version_model("give_skeleton"),
             max_tokens=self.max_tokens,
             temperature=0,
-            batch_size=1,
         )
         result = False
         output = None
         while not result:
-            traj = model.codegen(message, num_samples=1)[0]
-            row_output = traj["response"]
+            row_output = model.invoke(message).content
+            print(row_output)
             output, result = self.extract_skleton(row_output)
         return output
     @traceable(
@@ -502,14 +673,12 @@ Return only the locations.
         print("=" * 80)
 
         model = make_model(
-            model=self.model_name,
+            model=OpenIA_LLM.get_version_model("verify_tools_by_line"),
             max_tokens=self.max_tokens,
             temperature=0,
-            batch_size=1,
         )
-        traj = model.codegen(message, num_samples=1)[0]
-        traj["prompt"] = message
-        raw_output = traj["response"].replace("`", "")
+
+        raw_output = model.invoke(message).content
         list = raw_output.split("\n")
         result = []
         for el in list:
@@ -527,7 +696,7 @@ Return only the locations.
             seq_ver = path.split("_")
             if len(seq_ver) > 1:
                 end = seq_ver[-1]
-                if end[0].isupper():
+                if len(end) > 0 and end[0].isupper():
                     interface = seq_ver.pop()
                     path = ".".join(seq_ver)
                     path = path + "." + interface
@@ -540,21 +709,21 @@ Return only the locations.
             )
         return result
     @traceable(
-        name="7.4.1.map pseudo code to code"
+        name="7.4.2.map pseudo code to code"
     )
-    def map_pseudo_code_to_code(self, test_code, pseudo_code):
+    def map_pseudo_code_to_code(self, test_code, pseudo_code_lines, nodes_taken):
         prompt = self.map_pseudo_code.format(
             requirement=self.test_step,
             test_code=test_code,
-            pseudo_code=pseudo_code,
+            pseudo_code_lines="\n".join([pseudo_code['step_explication'] for pseudo_code in pseudo_code_lines]),
+            nodes_taken=json.dumps([node.properties['reference'] for node in nodes_taken], indent=4)
         )
         model = make_model(
-            model=self.model_name,
+            model=OpenIA_LLM.get_version_model("map_pseudo_code_to_code"),
             max_tokens=self.max_tokens,
             temperature=0,
-            batch_size=1,
         )
-        traj = model.codegen(prompt, num_samples=1)[0]["response"].replace("`", "")
+        traj = model.invoke(prompt).content.replace("`", "")
         lines = []
         for res in traj.split("\n"):
             if not res or len(res) == 0:
@@ -569,47 +738,16 @@ Return only the locations.
                 lines.append(res.strip())
         return lines
 
-    def verify_tools_in_code(self,tools, code, full_code):
-        prompt = self.verification_of_use_right_tools.format(
-            requirement=self.requirement,
-            tools=json.dumps(tools),
-            test_step=self.test_step,
-            code=code,
-            code_full=full_code
-        )
-        model = make_model(
-            model=self.model_name,
-            max_tokens=self.max_tokens,
-            temperature=0,
-            batch_size=1,
-        )
-        traj = model.codegen(prompt, num_samples=1)[0]
-        return traj["response"]
-
 
     def extract_skleton(self, raw_output):
-        output_list = raw_output.strip().replace("json", "").replace("`", "").split("\n")
-        result = {}
-        for el in output_list:
-            if el == "":
-                continue
-            seq = el.split("-")
-            if len(seq) < 2:
-                continue
-            number = int(seq[0].strip())
-            try:
-                json_parsed = json.loads("".join(seq[1:]).strip())
-            except JSONDecodeError as e:
-                print("error in json")
-                return None, False
-            result[number] = json_parsed
-        res = []
-        for i in range(len(result) + 1):
-            if i not in result:
-                continue
-            res.append(result[i])
+        output_list = raw_output.strip().replace("json", "").replace("`", "").replace(".py_Interface_def", ".py").replace(".py_", ".py")
 
-        return res, True
+        try :
+            result = json.loads(output_list)
+        except JSONDecodeError as e:
+            return {}, False
+
+        return result, True
 
     @traceable(
         name="7.2.localize functions names from files corresponding to test step"
@@ -635,14 +773,12 @@ Return only the locations.
         logging.info("=" * 80)
 
         model = make_model(
-            model=self.model_name,
+            model=OpenIA_LLM.get_version_model("localize_function_from_compressed_files"),
             max_tokens=self.max_tokens,
             temperature=0,
-            batch_size=1,
         )
-        traj = model.codegen(message, num_samples=1)[0]
-        traj["prompt"] = message
-        raw_output = traj["response"]
+
+        raw_output = model.invoke(message).content
         model_found_locs = extract_code_blocks(raw_output)
         model_found_locs_separated = extract_locs_for_files(
             model_found_locs, file_names
@@ -658,89 +794,5 @@ Return only the locations.
 
         print(raw_output)
 
-        return model_found_locs_separated, {"raw_output_loc": raw_output}, traj
+        return model_found_locs_separated, {"raw_output_loc": raw_output}
 
-    def localize_line_from_coarse_function_locs(
-            self,
-            file_names,
-            coarse_locs,
-            context_window: int,
-            sticky_scroll: bool,
-            temperature: float = 0.0,
-            num_samples: int = 1,
-    ):
-
-        file_contents = get_repo_files(self.structure, file_names)
-        topn_content, file_loc_intervals = construct_topn_file_context(
-            coarse_locs,
-            file_contents,
-            self.structure,
-            context_window=context_window,
-            loc_interval=True,
-            sticky_scroll=sticky_scroll,
-        )
-        template = self.obtain_relevant_code_combine_top_n_prompt
-        message = template.format(
-            requirement=self.requirement, test_step=self.test_step, file_contents=topn_content
-        )
-        logging.info(f"prompting with message:\n{message}")
-        logging.info("=" * 80)
-
-        model = make_model(
-            model=self.model_name,
-            max_tokens=self.max_tokens,
-            temperature=temperature,
-            batch_size=num_samples,
-        )
-        raw_trajs = model.codegen(message, num_samples=num_samples)
-
-        # Merge trajectories
-        raw_outputs = [raw_traj["response"] for raw_traj in raw_trajs]
-        traj = {
-            "prompt": message,
-            "response": raw_outputs,
-            "usage": {  # merge token usage
-                "completion_tokens": sum(
-                    raw_traj["usage"]["completion_tokens"] for raw_traj in raw_trajs
-                ),
-                "prompt_tokens": sum(
-                    raw_traj["usage"]["prompt_tokens"] for raw_traj in raw_trajs
-                ),
-            },
-        }
-        model_found_locs_separated_in_samples = []
-        for raw_output in raw_outputs:
-            model_found_locs = extract_code_blocks(raw_output)
-            model_found_locs_separated = extract_locs_for_files(
-                model_found_locs, file_names
-            )
-            model_found_locs_separated_in_samples.append(model_found_locs_separated)
-
-            logging.info(f"==== raw output ====")
-            logging.info(raw_output)
-            logging.info("=" * 80)
-            print(raw_output)
-            print("=" * 80)
-            logging.info(f"==== extracted locs ====")
-            for loc in model_found_locs_separated:
-                logging.info(loc)
-            logging.info("=" * 80)
-        logging.info("==== Input coarse_locs")
-        coarse_info = ""
-        for fn, found_locs in coarse_locs.items():
-            coarse_info += f"### {fn}\n"
-            if isinstance(found_locs, str):
-                coarse_info += found_locs + "\n"
-            else:
-                coarse_info += "\n".join(found_locs) + "\n"
-        logging.info("\n" + coarse_info)
-        if len(model_found_locs_separated_in_samples) == 1:
-            model_found_locs_separated_in_samples = (
-                model_found_locs_separated_in_samples[0]
-            )
-
-        return (
-            model_found_locs_separated_in_samples,
-            {"raw_output_loc": raw_outputs},
-            traj,
-        )
