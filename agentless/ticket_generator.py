@@ -173,7 +173,7 @@ def generate_code_error_ticket(graph, doc_ref):
     les = [cr['le'] for cr in les]
     tickets = []
     for le in les:
-        graph_code = build_graph_code(le['id'], doc_ref, "ERROR", graph)
+        graph_code = build_graph_code(le['id'], doc_ref, "HAS_ERROR_INSTRUCTION", graph)
 
         node_code = None
         node_le = le
