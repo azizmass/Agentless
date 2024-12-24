@@ -22,6 +22,7 @@ repo_to_top_folder = {
     "pylint-dev/pylint": "pylint",
     "pallets/flask": "flask",
     "MehdiMeddeb/taf_tools": "taf_tools",
+    "MehdiMeddeb/datasets": "datasets",
 }
 
 
