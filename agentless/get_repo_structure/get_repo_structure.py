@@ -5,8 +5,7 @@ import os
 import subprocess
 import uuid
 
-import pandas as pd
-from tqdm import tqdm
+github_token = os.getenv("GITHUB_TOKEN", None)
 
 repo_to_top_folder = {
     "django/django": "django",
@@ -49,11 +48,15 @@ def clone_repo(repo_name, repo_playground):
         print(
             f"Cloning repository from https://github.com/{repo_name}.git to {repo_playground}/{repo_to_top_folder[repo_name]}..."
         )
+        if github_token is not None:
+            path_repo = f"https://{github_token}@github.com/{repo_name}.git"
+        else:
+            path_repo = f"git@github.com:{repo_name}.git"
         subprocess.run(
             [
                 "git",
                 "clone",
-                f"git@github.com:{repo_name}.git",
+                path_repo,
                 f"{repo_playground}/{repo_to_top_folder[repo_name]}",
             ],
             check=True,
