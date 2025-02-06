@@ -22,6 +22,7 @@ repo_to_top_folder = {
     "pallets/flask": "flask",
     "MehdiMeddeb/taf_tools": "taf_tools",
     "MehdiMeddeb/datasets": "datasets",
+    "MehdiMeddeb/dataset_pytest": "dataset_pytest",
 }
 
 
@@ -34,7 +35,7 @@ def checkout_commit(repo_path, commit_id):
     try:
         # Change directory to the provided repository path and checkout the specified commit
         print(f"Checking out commit {commit_id} in repository at {repo_path}...")
-        subprocess.run(["git", "-C", repo_path, "checkout", commit_id], check=True)
+        subprocess.run(["git","-C", repo_path, "checkout", commit_id], check=True)
         print("Commit checked out successfully.")
     except subprocess.CalledProcessError as e:
         print(f"An error occurred while running git command: {e}")
@@ -42,7 +43,7 @@ def checkout_commit(repo_path, commit_id):
         print(f"An unexpected error occurred: {e}")
 
 
-def clone_repo(repo_name, repo_playground):
+def clone_repo(repo_name, repo_playground,branch=None):
     try:
 
         print(
@@ -62,6 +63,8 @@ def clone_repo(repo_name, repo_playground):
             check=True,
         )
         print("Repository cloned successfully.")
+        if branch is not None:
+            checkout_commit(f"{repo_playground}/{repo_to_top_folder[repo_name]}", branch)
     except subprocess.CalledProcessError as e:
         print(f"An error occurred while running git command: {e}")
     except Exception as e:
